@@ -8,7 +8,7 @@
 
 ## 1. 项目愿景
 
-用 **Go** 从零构建一个 agent 框架，最终服务于 **gaming 场景**：agent 驱动的游戏世界（NPC、世界状态、多 agent 感知-行动交互）。
+用 **Go** 从零构建一个 agent 框架，最终服务于 **gaming 场景**：agent 驱动的游戏世界（NPC、世界状态、多 agent 感知-行动交互）。最终形态是 **Go 后端当大脑 + 浏览器（three.js）当渲染层**，本地运行——API key 安全地留在 Go 进程，前端只负责把世界画出来。
 
 但起点极其朴素：**一个能跑通的最小 LLM ReAct 循环**。
 
@@ -28,6 +28,7 @@
 | 模块路径 | `github.com/simonxluo/GamingWorld` |
 | 配置来源 | `.env`（`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`） |
 | LLM 端点 | `http://api.simonluo.site`（**Anthropic Messages API 兼容**），模型 `glm-5.2`；备用 DeepSeek `https://api.deepseek.com/anthropic` |
+| 渲染层 | 浏览器 three.js / canvas（经 SSE 订阅 Go 后端的 Event 流） |
 | 包命名 | **全小写**（`runtime/agent`，不是 `runtime/Agent`） |
 | 错误处理 | 显式 `error` 返回，**不 panic**，不滥用 `panic/recover` |
 | 日志 | 标准库 `log/slog` |
@@ -41,10 +42,15 @@
 
 ## 3. 架构全景（最终形态，先看清要去哪）
 
-两层分离：
+三层分离（自顶向下）：
 
 ```
 ┌─────────────────────────────────────────────────────────┐
+│  浏览器（three.js / canvas）   渲染层：把世界画出来        │
+│      NPC 位置、动作、对话气泡、特效 ……                     │
+└────────────────────────┬────────────────────────────────┘
+                         │ SSE / WebSocket（单向推 Event 流）
+┌────────────────────────▼────────────────────────────────┐
 │  agents/          业务层：具体 agent 实现（NPC、玩家代理）  │
 │      npc.go  player.go  ...                              │
 └────────────────────────┬────────────────────────────────┘
@@ -55,15 +61,18 @@
 │   llm/        LLM 客户端封装（Messages API）              │
 │   tool/       Tool 接口 + Registry                        │
 │   agent/      ReAct 循环引擎（核心）                      │
-│   state/      一次运行的轨迹 / 世界状态                    │
+│   state/      单个 agent 的一次运行轨迹（私有）            │
+│   world/      共享可变游戏世界（多 agent 共用，一等公民）   │
 │   memory/     短期(进程内) + 长期(文件/kv) 记忆            │
-│   event/      可观测性 / 流式输出                          │
+│   event/      可观测性 / 流式（也是前端接入点）            │
 │   checkpoint/ 状态序列化、中断恢复                         │
 │   scheduler/  多 agent 调度、并发、事件驱动                │
 └─────────────────────────────────────────────────────────┘
 ```
 
-**关键认知**：`runtime/` 不是一开始就有的。它是阶段 3 之后，从 `main.go` 里**一步步抽出来的**。下面的路线图会演示这个抽取过程。
+**两个关键认知**：
+1. `runtime/` 不是一开始就有的。它是阶段 3 之后，从 `main.go` 里**一步步抽出来的**。下面的路线图会演示这个抽取过程。
+2. `state`（单 agent 私有轨迹）和 `world`（多 agent 共享状态）是**两回事**，别混。gaming 的依赖链是：**World → scheduler → gaming**。
 
 ---
 
@@ -95,11 +104,13 @@ ReAct = **Reason + Act**。抛开一切框架，它就是一个 while 循环：
 ```
 Thought: <一句话推理>
 Action: <工具名>
-Action Input: <参数，单行或 JSON>
+Action Input: <参数，强制单行>
 ```
+> **单行约束**：`Action Input` 一律单行（阶段 2 解析用 `strings.HasPrefix` 按行读）。需要多个参数时用空格分隔的 `key=value`，例如 `Action Input: x=23 y=17`，**不要**用多行 JSON。多行结构化输入等阶段 7 切到原生 tool use 再放开。
+
 执行后，我们的代码追加：
 ```
-Observation: <工具执行结果>
+Observation: <工具执行结果，可多行>
 ```
 当模型想结束，它输出：
 ```
@@ -138,7 +149,7 @@ Final Answer: <最终回答>
 - 硬编码 1~2 个工具，例如：
   - `calculate`：用 Go 算简单算式（`eval` 自实现或限定四则运算）
   - `echo`：原样返回（用于调试）
-- prompt 里写明工具清单与输出协议（见第 4 节）。
+- prompt 里写明工具清单与输出协议（见第 4 节）。严格遵守 `Action Input` 单行约束。
 - **验收**：问 `23 乘以 17 是多少`，终端能看到 `Thought → Action → Observation → Final Answer: 391` 的完整轨迹。
 - **这一步先丑着**：解析用 `strings.HasPrefix`、工具用 `switch` 都行。重点是跑通循环，不是优雅。
 
@@ -173,20 +184,25 @@ Final Answer: <最终回答>
   ```
 - `cmd/react/main.go` 缩成 ~10 行：装配 → `agent.Run`。
 - **验收**：换一个完全不同的问题域（如"查时间+算数"），`main` 不动，只换 `System` 和注册的工具。
+- **演进预告**：`Run` 现在是同步签名。阶段 9 多 agent 并发 tick 时会暴露局限（LLM 调用阻塞），届时再演进成异步。
 
 ### ▶ 阶段 5：State + Memory → `runtime/state`、`runtime/memory`
-- `runtime/state`：把"历史/轨迹"显式建模为 `State`（steps 列表），不再藏在循环局部变量里。
-- `runtime/memory`：抽象存储接口 `Memory { Load / Save }`；先实现进程内 map（短期），再加文件实现（长期）。
+- `runtime/state`：把**单个 agent 的一次运行轨迹**显式建模为 `State`（steps 列表，agent 私有），不再藏在循环局部变量里。⚠️ 这里只存"一个 agent 的一次对话历史"，**不存共享世界**——世界是 `world/` 的事（阶段 10）。
+- `runtime/memory`：抽象存储接口 `Memory { Load / Save }`，按 agent 维度存取**跨运行**的持久化；先实现进程内 map（短期），再加文件实现（长期）。
+- **边界规则**：`state` = 单次运行内（可序列化、可恢复）；`memory` = 跨运行持久化（按 agent 维度）。两者都不碰共享世界。
 - **验收**：agent 处理完一个输入后，`State` 可序列化；下次 `Load` 能恢复上下文继续对话。
 
-### ▶ 阶段 6：Event 系统 → `runtime/event`
+### ▶ 阶段 6：Event 系统 → `runtime/event`（也是前端接入点）
 **暴露的抽象点**：循环里到处 `slog.Info` 打日志，想加流式输出就得改循环 → 用事件解耦。
-- `runtime/event`：定义 `Event`（Thought/Action/Observation/Final/Error），`Agent` 持有 `[]Handler`，每步 `emit`。
-- **验收**：写两个 handler——一个打日志、一个流式打印到 stdout；循环代码只负责 `emit`，不知道谁在听。
+- `runtime/event`：定义 `Event`（Thought/Action/Observation/Final/Error），`Agent` 持有 `[]Handler`，每步 `emit`。循环代码只负责 `emit`，不知道谁在听。
+- **新增 HTTP server + SSE**：写一个 handler 订阅 Event 流，经 `GET /events` 用 Server-Sent Events 单向推给浏览器——这正是 Go 后端连 three.js 前端的通道。
+- **验收**：① 一个 handler 打 `slog` 日志；② 一个流式打印到 stdout；③ 一个经 SSE 推出（先用 `curl -N http://localhost:PORT/events` 验证能看到 Event 流，three.js 渲染留到前端阶段）。
+- **提醒**：手写 SSE 解析（分片、事件边界）有坑，这里是"坚持不引第三方"成本最高的一处，做的时候要有心理准备。
 
-### ▶ 阶段 7：原生 Tool Use（可选对比）
-- 在 `runtime/llm` 增加基于 Anthropic `tools` 参数的调用路径，对比 prompt ReAct。
-- **目标**：理解两种范式取舍，确认我们的抽象（`Tool` 接口）对两种解析器都成立。
+### ▶ 阶段 7：原生 Tool Use（gaming 必经，非可选）
+- 在 `runtime/llm` 增加基于 Anthropic `tools` 参数的调用路径，对比 prompt ReAct。⚠️ 这**不只是换解析器**——还要改 **API 调用本身**：请求体加 `tools` 字段、响应体解析 `tool_use` block。
+- **为什么必经**：gaming 里多个 NPC 高频决策，纯 prompt 文本解析容易格式漂移（JSON 没闭合、中英文标点混用）导致 NPC 卡住；原生 tool use 返回结构化、可靠得多。
+- **目标**：确认我们的抽象（`Tool` 接口）对两种解析器都成立。
 
 ### ▶ 阶段 8：Checkpoint → `runtime/checkpoint`
 - 基于 `state`：序列化、存盘、`Restore`。
@@ -194,11 +210,13 @@ Final Answer: <最终回答>
 
 ### ▶ 阶段 9：Scheduler → `runtime/scheduler`
 - 多 agent、并发调度、事件驱动 tick。为 gaming 多 NPC 世界铺路。
-- **验收**：两个 agent 在一个共享 `state`（世界）里轮流行动。
+- scheduler 共享的是 **World**（阶段 10 建的一等公民），而**不是**各 agent 私有的 `state`。依赖链：**World → scheduler → gaming**。
+- **验收**：两个 agent 在一个共享 `World` 里轮流行动，彼此能看到对方造成的世界变化。
 
-### ▶ 阶段 10：Gaming 特化 → `agents/`
-- 世界状态、感知-行动循环、NPC persona、玩家代理。
-- **里程碑**：一个 NPC 能根据世界状态 + 玩家输入，用 ReAct 决策并调用"移动/说话/拾取"等工具。
+### ▶ 阶段 10：Gaming 特化 → `agents/` + `runtime/world`
+- 先把 **`World`** 建成一等公民（`runtime/world`：地图、物品、NPC 位置、事件队列）——它是多 agent 共享的可变状态，独立于各 agent 的 `state`。然后做感知-行动循环、NPC persona、玩家代理。
+- **里程碑**：一个 NPC 能根据 `World` 状态 + 玩家输入，用 ReAct 决策并调用"移动/说话/拾取"等工具；scheduler 让多个 NPC 在同一 `World` 里互动。
+- **前端接入**：把阶段 6 的 SSE 流接上 three.js，把 `World` 和 NPC 的动作渲染出来。
 
 ---
 
@@ -206,7 +224,7 @@ Final Answer: <最终回答>
 
 1. **先能跑，再抽象** —— 阶段 2 必须先丑着跑通，才有资格在阶段 3+ 抽象。
 2. **每阶段一个可运行入口** —— `cmd/<name>/main.go` 是阶段的"验收证明"。
-3. **接口小而稳，实现可替换** —— `Tool`、`Memory`、`Memory Handler` 都是窄接口。
+3. **接口小而稳，实现可替换** —— `Tool`、`Memory`、`event.Handler` 都是窄接口。
 4. **测试用 fake LLM** —— 单测不依赖真实 API：实现一个返回预设文本的 `FakeLLM`，让 ReAct 解析/循环逻辑可确定性测试。
 5. **真实 key 永不入库** —— `.env` 已被 `.gitignore`；代码里 key 只从环境读，不硬编码、不全量打日志。
 
@@ -224,12 +242,14 @@ GamingWorld/
 │   ├── llm/        # 阶段 1
 │   ├── tool/       # 阶段 3
 │   ├── agent/      # 阶段 4
-│   ├── state/      # 阶段 5
-│   ├── memory/     # 阶段 5
-│   ├── event/      # 阶段 6
+│   ├── state/      # 阶段 5：单 agent 运行轨迹（私有）
+│   ├── memory/     # 阶段 5：跨运行持久化（按 agent 维度）
+│   ├── event/      # 阶段 6：含 SSE 前端接入点
 │   ├── checkpoint/ # 阶段 8
-│   └── scheduler/  # 阶段 9
-├── agents/         # 阶段 10：业务 agent
+│   ├── scheduler/  # 阶段 9
+│   └── world/      # 阶段 10：共享可变游戏世界（一等公民）
+├── agents/         # 阶段 10：业务 agent（NPC、玩家代理）
+├── web/            # 阶段 6 之后：three.js 前端（到对应阶段才建）
 ├── internal/
 │   └── env/        # 阶段 0：.env 加载
 ├── .env            # 本地真实配置（不入库）
@@ -237,7 +257,7 @@ GamingWorld/
 └── CLAUDE.md       # 本文件
 ```
 
-> 注：现有 `runtime/` 下的大写目录（`Agent/` 等）将统一改为小写，以符合 Go 包命名惯例。
+> 注：现有 `runtime/` 下的大写目录（`Agent/` 等）将统一改为小写，以符合 Go 包命名惯例。`web/` 与 `runtime/world/` 到对应阶段才创建，避免过早抽象。
 
 ---
 
@@ -259,8 +279,8 @@ go build ./...                                  # 全量编译检查
 ## 9. 当前进度
 
 - [x] 配置基础设施：`.env` / `.env.example` / `.gitignore`（已提交，真实 key 仅在本地）
-- [x] 本构建指南 `CLAUDE.md`
+- [x] 本构建指南 `CLAUDE.md`（v2：补前端层 / state-world 拆分 / ReAct 单行约束）
 - [ ] **阶段 0：项目骨架** ← 下一步
 - [ ] 阶段 1 ~ 10：见路线图
 
-**下一步行动**：执行阶段 0——`go mod init`、写 `internal/env`、写 `cmd/hello`，跑通配置加载。
+**下一步行动**：执行阶段 0——写 `internal/env`（手写 `.env` 解析）、写 `cmd/hello`，跑通配置加载。
