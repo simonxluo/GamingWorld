@@ -13,7 +13,27 @@ type Client struct {
 	HttpClient *http.Client
 }
 
-func (c *Client) Complete(ctx context.Context, systen, user string) (string, error) {
+// 协议常量：Message API 要求显示提供版本号和路径
+const (
+	maxTokens        = 8192
+	anthropicVersion = "2023-06-01"
+	messagesPath     = "/v1/messages"
+)
+
+// 请求结构体 - anthropic格式
+type messagesRequest struct {
+	Model     string        `json:"model"`
+	MaxTokens int           `json:"max_tokens"`
+	System    string        `json:"system,omitempty"`
+	Messages  []chatMessage `json:"messages"`
+}
+
+type chatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+func (c *Client) Complete(ctx context.Context, system, user string) (string, error) {
 	// TODO 1: 组请求体结构（定义 request 结构体 + json tag）
 	//   model, max_tokens, system, messages: [{role:"user", content: user}]
 	// TODO 2: json.Marshal → bytes.NewReader(body)
