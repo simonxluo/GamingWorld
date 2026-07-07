@@ -11,14 +11,14 @@ import (
 )
 
 func main() {
-	if err := env.LoadEnv(".env"); err != nil {
+	if err := env.LoadEnv("/home/user/workspace/GamingWorld/.env"); err != nil {
 		fmt.Fprintln(os.Stderr, "warn: 未加载 .env:", err)
 	}
 
 	c := &llm.Client{
-		ApiURL: os.Getenv("LLM_BASE_URL"),
-		ApiKey: os.Getenv("LLM_API_KEY"),
-		Model:  os.Getenv("LLM_MODEL"),
+		BaseUrl: os.Getenv("LLM_BASE_URL"),
+		ApiKey:  os.Getenv("LLM_API_KEY"),
+		Model:   os.Getenv("LLM_MODEL"),
 	}
 
 	fmt.Print("> ")
