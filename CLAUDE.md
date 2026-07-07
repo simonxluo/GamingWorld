@@ -276,6 +276,23 @@ go build ./...                                  # 全量编译检查
 
 读取 `.env`：进程启动时调用 `internal/env.LoadEnv(".env")`，之后用 `os.Getenv("LLM_BASE_URL")` 等。
 
+### 代码索引（SCIP）
+
+本项目用 [`scip-go`](https://github.com/sourcegraph/scip-go) 生成**精确代码知识图**（基于 Go 官方 typechecker 的 SCIP 索引），用于精确的"跳定义 / 查引用 / 影响分析"——比如改 `Tool` 接口后，一条查询就能列出所有实现它的类型。这是 ctags / grep / embedding 都给不了的精度。
+
+> **新开发机首次配置必读**：`index.scip` 是**本地可重建产物**（已在 `.gitignore` 中，不入库）。在另一台机器上 clone 本仓库后，索引不会自动存在，需要手动重建：
+
+```bash
+# 1) 安装 scip-go（要求 Go ≥ 1.25；只装一次）
+go install github.com/scip-code/scip-go/cmd/scip-go@latest
+# 二进制在 $(go env GOPATH)/bin，确保该目录在 $PATH 里，否则用全路径调用
+
+# 2) 在项目根目录生成索引（产物：./index.scip）
+scip-go
+```
+
+之后 Claude / 编辑器即可消费 `index.scip` 做精确导航。代码改动后重新跑一次 `scip-go` 刷新即可。
+
 ---
 
 ## 9. 当前进度
