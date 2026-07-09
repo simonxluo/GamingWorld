@@ -98,7 +98,7 @@ func (c *Client) Complete(ctx context.Context, system, user string) (string, err
 	}
 	// TODO 5: 检查 resp.StatusCode != 200 → 读 body 返回错误
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("llm 端点返回 %s: %s", resp.StatusCode, string(respBody))
+		return "", fmt.Errorf("llm 端点返回 %d: %s", resp.StatusCode, string(respBody))
 	}
 	// TODO 6: 解析响应结构（content 是数组，取 [0].text），返回 text
 	var parsed messagesResponse

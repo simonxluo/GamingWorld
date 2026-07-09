@@ -10,24 +10,35 @@ import (
 
 	"github.com/simonxluo/GamingWorld/internal/env"
 	"github.com/simonxluo/GamingWorld/runtime/llm"
+	"github.com/simonxluo/GamingWorld/runtime/tool"
 )
 
-const systemPrompt = `你是一个用 ReAct 范式解题的助手。每一步严格按以下格式输出，不要输出任何额外文字：
+const systemPrompt = `你是一个用 ReAct 范式解题的助手。
+可用工具:
+%s
 
-Thought: <一句话推理：我下一步该想/做什么>
-Action: <工具名，必须从工具清单里选>
-Action Input: <给工具的参数，强制单行，多参数用 key=value 空格分隔>
-
-当你已经得到答案，用这个格式结束（不要再输出 Action）：
-Thought: <推理>
-Final Answer: <最终回答给用户的内容>
-
-可用工具：
-- calculate: 整数四则运算。Action Input 形如: a=23 op=* b=17
-- echo: 原样返回输入，用于调试。Action Input: 任意文本
-
-规则：Action Input 必须单行；禁止输出 JSON；未拿到结果前不要给 Final Answer。
+规则：...
 `
+
+type CalculateTool struct{}
+
+func (CalculateTool) Name() string { return "calculate" }
+func (CalculateTool) Description() string {
+	return "整数四则运- Action Input 形如: a= 23 op=* b=17"
+}
+func (CalculateTool) Run(_ context.Context, input string) (string, error) {
+	return calculate(input)
+}
+
+type EchoTool struct{}
+
+func (EchoTool) Name() string { return "calculate" }
+func (EchoTool) Description() string {
+	return "原样返回输入，用于调试，Action Input: 任意文本"
+}
+func (EchoTool) Run(_ context.Context, input string) (string, error) {
+	return input, nil
+}
 
 func main() {
 	if err := env.LoadEnv(".env"); err != nil {
@@ -40,13 +51,19 @@ func main() {
 		Model:   os.Getenv("LLM_MODEL"),
 	}
 
+	tools := tool.NewRegistry()
+	tools.Register(CalculateTool{})
+	tools.Register(EchoTool{})
+
+	system := fmt.Sprintf(systemPrompt, tools.Spec())
+
 	fmt.Print("> ")
 	sc := bufio.NewScanner(os.Stdin)
 	if !sc.Scan() {
 		return
 	}
 
-	answer, err := react(context.Background(), c, systemPrompt, sc.Text(), 8)
+	answer, err := react(context.Background(), c, system, sc.Text(), 8, tools)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
@@ -56,7 +73,7 @@ func main() {
 }
 
 // react 执行ReAct 循环: 调 LLM -> 解析 -> 执行工具 -> 回填 Observation，直到拿到 Final Answer
-func react(ctx context.Context, c *llm.Client, system, question string, maxSteps int) (string, error) {
+func react(ctx context.Context, c *llm.Client, system, question string, maxSteps int, tools *tool.Registry) (string, error) {
 	history := "用户问题： " + question + "\n"
 	for step := 1; step <= maxSteps; step++ {
 		fmt.Printf("\n---- step %d ----\n", step)
@@ -76,10 +93,19 @@ func react(ctx context.Context, c *llm.Client, system, question string, maxSteps
 			history += output + "\nObservation: 格式错误：未找到 Action 或 Final Answer, 请严格按照格式输 \n\n"
 			continue
 		}
-		observation, err := execute(action, actionInput)
-		if err != nil {
-			observation = "工具调用执行失败：" + err.Error()
+		t, ok := tools.Get(action)
+		observation := ""
+		if !ok {
+			observation = "未知工具: " + action
+		} else {
+			result, err := t.Run(ctx, actionInput)
+			if err != nil {
+				observation = "工具执行失败: " + err.Error()
+			} else {
+				observation = result
+			}
 		}
+
 		history += output + "\nObservation: " + observation + "\n\n"
 	}
 	return "", fmt.Errorf("react: 达到最大步数 %d 仍未结束", maxSteps)
@@ -107,17 +133,6 @@ func parseAction(output string) (action, actionInput string, ok bool) {
 
 	actionInput, _ = field(output, "Action Input:")
 	return action, actionInput, true
-}
-
-func execute(action, actionInput string) (string, error) {
-	switch action {
-	case "calculate":
-		return calculate(actionInput)
-	case "echo":
-		return actionInput, nil
-	default:
-		return "", fmt.Errorf("未知工具: %s", action)
-	}
 }
 
 func calculate(actionInput string) (string, error) {
