@@ -299,7 +299,12 @@ scip-go
 
 - [x] 配置基础设施：`.env` / `.env.example` / `.gitignore`（已提交，真实 key 仅在本地）
 - [x] 本构建指南 `CLAUDE.md`（v2：补前端层 / state-world 拆分 / ReAct 单行约束）
-- [ ] **阶段 0：项目骨架** ← 下一步
-- [ ] 阶段 1 ~ 10：见路线图
+- [x] 阶段 0：项目骨架（`internal/env` 手写 `.env` 解析 + `cmd/hello`）
+- [x] 阶段 1：最小 LLM 调用（`runtime/llm/client.go`，Anthropic Messages API）
+- [x] 阶段 2：最小 ReAct 循环（`cmd/react` 单文件跑通 23×17=391）
+- [x] 阶段 3：Tool 系统（`runtime/tool`：`Tool` 接口 + `Registry`；加 `now` 工具不改循环）
+- [x] 阶段 4：抽象循环 → `runtime/agent`（`Agent.Run` + `Completer` 接口，`cmd/react` 瘦身）
+- [ ] **阶段 5：State + Memory** ← 下一步
+- [ ] 阶段 6 ~ 10：见路线图
 
-**下一步行动**：执行阶段 0——写 `internal/env`（手写 `.env` 解析）、写 `cmd/hello`，跑通配置加载。
+**下一步行动**：执行阶段 5——把单个 agent 的一次运行轨迹建模为 `runtime/state`（可序列化、可恢复），把跨运行持久化抽成 `runtime/memory`（按 agent 维度 Load/Save）。注意 state（单次运行内）与 memory（跨运行）的边界。

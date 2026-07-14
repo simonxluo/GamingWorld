@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/simonxluo/GamingWorld/runtime/llm"
 	"github.com/simonxluo/GamingWorld/runtime/tool"
 )
 
+type Completer interface {
+	Complete(ctx context.Context, system, user string) (string, error)
+}
 type Agent struct {
-	LLM      *llm.Client
+	LLM      Completer
 	Tools    *tool.Registry
 	System   string
 	MaxSteps int
@@ -73,15 +75,4 @@ func parseAction(output string) (action, actionInput string, ok bool) {
 	}
 	actionInput, _ = field(output, "Action Input:")
 	return action, actionInput, true
-}
-
-func parseKV(s string) map[string]string {
-	m := map[string]string{}
-	for _, f := range strings.Fields(s) {
-		if k, v, ok := strings.Cut(f, "="); ok {
-			m[k] = v
-		}
-	}
-
-	return m
 }
