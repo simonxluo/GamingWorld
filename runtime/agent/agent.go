@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/simonxluo/GamingWorld/runtime/state"
 	"github.com/simonxluo/GamingWorld/runtime/tool"
 )
 
@@ -18,40 +19,40 @@ type Agent struct {
 	MaxSteps int
 }
 
-func (a Agent) Run(ctx context.Context, input string) (string, error) {
-	history := fmt.Sprintf("用户问题: %s \n", input)
+func (a Agent) Run(ctx context.Context, input string, s *state.State) (string, error) {
+	s.Input = input
 
 	for step := 1; step < a.MaxSteps; step++ {
-		fmt.Printf("\n---- step %d ----\n", step)
-		output, err := a.LLM.Complete(ctx, a.System, history)
-		if err != nil {
-			return "", fmt.Errorf("agent stop %d 调用失败: %w", step, err)
-		}
-		fmt.Println(output)
+		output, _ := a.LLM.Complete(ctx, a.System, s.GetHistory())
 
 		if ans, ok := parseFinal(output); ok {
+			s.Final = ans
 			return ans, nil
 		}
-		action, actionInput, ok := parseAction(output)
-		if !ok {
-			history += output + "\nObservation: 格式错误, 未找到Action 或 Final Answer, 请严格按照格式输出\n\n"
-			continue
-		}
+
+		action, actionInput, _ := parseAction(output)
+		observation := ""
 
 		t, ok := a.Tools.Get(action)
-		observation := ""
 		if !ok {
-			observation = "未知工具: " + action
-		} else {
-			result, err := t.Run(ctx, actionInput)
-			if err != nil {
-				observation = fmt.Sprintf("工具 %q 执行失败: %v", action, err)
-			} else {
-				observation = result
-			}
+			observation = fmt.Sprintf("未知工具:%s", action)
 		}
-		history += fmt.Sprintf("Action: %s\nAction Input: %s\nObservation: %s\n\n", action, actionInput, observation)
+		result, err := t.Run(ctx, actionInput)
+		if err != nil {
+			observation = fmt.Sprintf("工具:%s 调用失败", action)
+		}
+
+		observation = fmt.Sprintf("Action:%s, ActionInput:%s, Result:%s", action, actionInput, result)
+
+		s.Append(state.Step{
+			LLMOutput:   output,
+			Action:      action,
+			ActionInput: actionInput,
+			Observation: observation,
+		})
+
 	}
+
 	return "", nil
 }
 func field(output, prefix string) (string, bool) {

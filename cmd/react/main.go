@@ -9,6 +9,7 @@ import (
 	"github.com/simonxluo/GamingWorld/internal/env"
 	"github.com/simonxluo/GamingWorld/runtime/agent"
 	"github.com/simonxluo/GamingWorld/runtime/llm"
+	"github.com/simonxluo/GamingWorld/runtime/state"
 	"github.com/simonxluo/GamingWorld/runtime/tool"
 )
 
@@ -58,7 +59,7 @@ func main() {
 		return
 	}
 
-	answer, err := agent.Run(context.Background(), sc.Text())
+	answer, err := agent.Run(context.Background(), sc.Text(), state.New(""))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
