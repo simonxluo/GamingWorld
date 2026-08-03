@@ -3,6 +3,8 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sync"
@@ -25,13 +27,15 @@ type InMemory struct {
 }
 
 func NewInMemory() *InMemory {
-	return &InMemory{}
+	return &InMemory{
+		data: make(map[string]*state.State),
+	}
 }
 
 // Load 在读保护下查找；命中返回该 State，未命中返回 state.New(agentID)
 func (m *InMemory) Load(_ context.Context, agentID string) (*state.State, error) {
 	m.mu.RLock()
-	defer m.mu.Unlock()
+	defer m.mu.RUnlock()
 	if s, ok := m.data[agentID]; ok {
 		return s, nil
 	}
@@ -57,7 +61,7 @@ type File struct {
 func (f *File) Load(_ context.Context, agentID string) (*state.State, error) {
 	data, err := os.ReadFile(f.path(agentID))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, fs.ErrNotExist) {
 			return state.New(agentID), nil
 		}
 		return nil, err
