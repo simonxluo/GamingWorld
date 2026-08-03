@@ -79,6 +79,7 @@ func main() {
 	s, err := mem.Load(ctx, *id)
 	if err != nil {
 		fmt.Printf("err:%v", err)
+		panic(err)
 	}
 
 	// ── (5) 交互循环
@@ -101,6 +102,7 @@ func main() {
 		answer, err := a.Run(ctx, input, s)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "stdin 读取错误: %v\n", err)
+			continue
 		}
 		fmt.Println("\n===>", answer)
 		mem.Save(ctx, *id, s)
