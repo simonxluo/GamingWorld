@@ -79,7 +79,7 @@ func main() {
 	s, err := mem.Load(ctx, *id)
 	if err != nil {
 		fmt.Printf("err:%v", err)
-		panic(err)
+		os.Exit(1)
 	}
 
 	// ── (5) 交互循环
@@ -96,16 +96,27 @@ func main() {
 	//   }
 	//   循环结束（EOF）后可查 sc.Err()
 	sc := bufio.NewScanner(os.Stdin)
+
 	fmt.Printf("> ")
 	for sc.Scan() {
 		input := strings.TrimSpace(sc.Text())
-		answer, err := a.Run(ctx, input, s)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "stdin 读取错误: %v\n", err)
+
+		if input == "" {
 			continue
 		}
+
+		answer, err := a.Run(ctx, input, s)
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "agent 运行错误: %v\n", err)
+			continue
+		}
+
 		fmt.Println("\n===>", answer)
 		mem.Save(ctx, *id, s)
-		fmt.Print("> ")
+		fmt.Printf("> ")
+	}
+	if err := sc.Err(); err != nil {
+		fmt.Fprintln(os.Stderr, "stdin 异常:", err)
 	}
 }
