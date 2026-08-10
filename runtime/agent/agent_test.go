@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"testing"
+
+	"github.com/simonxluo/GamingWorld/runtime/state"
+	"github.com/simonxluo/GamingWorld/runtime/tool"
 )
 
 // fakeLLM 实现 Completer，按预设脚本依次返回，完全不碰网络
@@ -63,6 +66,18 @@ func TestParseAction(t *testing.T) {
 	}
 }
 
+type echoTool struct{}
+
+func (echoTool) Name() string {
+	return "echo"
+}
+func (echoTool) Description() string {
+	return "原样返回 input"
+}
+func (echoTool) Run(_ context.Context, input string) (string, error) {
+	return input, nil
+}
+
 // TestRunLoop：用 fakeLLM 驱动一次两步循环，断言 State 轨迹被正确记录
 func TestRunLoop(t *testing.T) {
 	// 装配：
@@ -84,4 +99,39 @@ func TestRunLoop(t *testing.T) {
 	//   - s.Steps[0].Action == "echo" && s.Steps[0].Observation 含 "391"
 	//
 	// 提示：用到 tool / state，记得加 import
+	llm := &fakeLLM{
+		replies: []string{
+			"Thought: 我用工具\nAction: echo\nAction Input: 391",
+			"Thought: 拿到结果\nFinal Answer: 391",
+		},
+	}
+
+	tools := tool.NewRegistry()
+	tools.Register(echoTool{})
+
+	a := Agent{
+		LLM:      llm,
+		Tools:    tools,
+		System:   "",
+		MaxSteps: 5,
+	}
+
+	s := state.New("test")
+	answer, err := a.Run(context.Background(), "ask anything", s)
+
+	if err != nil {
+		t.Errorf("Run() error = %v", err)
+	}
+
+	if answer != "391" {
+		t.Errorf("Run() answer = %v", answer)
+	}
+
+	if len(s.Steps) != 1 {
+		t.Errorf("Run() len(s.Steps) = %v", len(s.Steps))
+	}
+
+	if s.Final != "391" {
+		t.Errorf("Run() s.Final = %v", s.Final)
+	}
 }
