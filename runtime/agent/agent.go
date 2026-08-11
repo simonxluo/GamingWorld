@@ -23,7 +23,10 @@ func (a Agent) Run(ctx context.Context, input string, s *state.State) (string, e
 	s.Input = input
 
 	for step := 1; step < a.MaxSteps; step++ {
-		output, _ := a.LLM.Complete(ctx, a.System, s.GetHistory())
+		output, err := a.LLM.Complete(ctx, a.System, s.GetHistory())
+		if err != nil {
+			return "", fmt.Errorf("LLM 调用失败: %w", err)
+		}
 
 		if ans, ok := parseFinal(output); ok {
 			s.Final = ans
@@ -36,13 +39,14 @@ func (a Agent) Run(ctx context.Context, input string, s *state.State) (string, e
 		t, ok := a.Tools.Get(action)
 		if !ok {
 			observation = fmt.Sprintf("未知工具:%s", action)
+		} else {
+			result, err := t.Run(ctx, actionInput)
+			if err != nil {
+				observation = fmt.Sprintf("工具:%s 调用失败", action)
+			} else {
+				observation = fmt.Sprintf("Action:%s, ActionInput:%s, Result:%s", action, actionInput, result)
+			}
 		}
-		result, err := t.Run(ctx, actionInput)
-		if err != nil {
-			observation = fmt.Sprintf("工具:%s 调用失败", action)
-		}
-
-		observation = fmt.Sprintf("Action:%s, ActionInput:%s, Result:%s", action, actionInput, result)
 
 		s.Append(state.Step{
 			LLMOutput:   output,
