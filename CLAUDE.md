@@ -1,5 +1,7 @@
 # CLAUDE.md — GamingWorld Go Agent 框架构建指南
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 本文件是本项目的"宪法"与教学路线图。它同时服务于：
 - **人类**（项目所有者）：理解架构、按阶段推进、把控设计方向；
 - **AI 协作者（Claude）**：在本仓库工作时的首要参考，遵循其中的约定与阶段顺序。
@@ -24,7 +26,7 @@
 
 | 项 | 约定 |
 |---|---|
-| 语言 | Go 1.22+（用 `range-over-int`、`slices`、`maps` 标准库） |
+| 语言 | Go 1.25+（`go.mod` 锁 1.25.7；scip-go 要求 ≥1.25；用 `range-over-int`、`slices`、`maps` 标准库） |
 | 模块路径 | `github.com/simonxluo/GamingWorld` |
 | 配置来源 | `.env`（`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`） |
 | LLM 端点 | `http://api.simonluo.site`（**Anthropic Messages API 兼容**），模型 `glm-5.2`；备用 DeepSeek `https://api.deepseek.com/anthropic` |
@@ -185,6 +187,7 @@ Final Answer: <最终回答>
 - `cmd/react/main.go` 缩成 ~10 行：装配 → `agent.Run`。
 - **验收**：换一个完全不同的问题域（如"查时间+算数"），`main` 不动，只换 `System` 和注册的工具。
 - **演进预告**：`Run` 现在是同步签名。阶段 9 多 agent 并发 tick 时会暴露局限（LLM 调用阻塞），届时再演进成异步。
+- **阶段 5 已落地**：`Run` 演进为三参——`func (a Agent) Run(ctx, input string, s *state.State) (string, error)`，把运行轨迹从循环局部变量提升为显式传入的 `*state.State`，为 memory 跨运行恢复铺路；`Agent.LLM` 也由具体 `*llm.Client` 换成 `Completer` 接口（fake-LLM 测试地基）。
 
 ### ▶ 阶段 5：State + Memory → `runtime/state`、`runtime/memory`
 - `runtime/state`：把**单个 agent 的一次运行轨迹**显式建模为 `State`（steps 列表，agent 私有），不再藏在循环局部变量里。⚠️ 这里只存"一个 agent 的一次对话历史"，**不存共享世界**——世界是 `world/` 的事（阶段 10）。
@@ -222,6 +225,8 @@ Final Answer: <最终回答>
 
 ## 6. 设计原则（贯穿所有阶段）
 
+**教学而非代写**：本项目是所有者的学习载体。AI 协作者默认只给思路、示例代码与讲解，不直接替用户改实现——让用户自己动手写，才有学习价值。仅当用户明确要求「直接改 / 帮我写」时才代为落盘；代写时也只做被要求的那一步，不顺手扩大范围。
+
 1. **先能跑，再抽象** —— 阶段 2 必须先丑着跑通，才有资格在阶段 3+ 抽象。
 2. **每阶段一个可运行入口** —— `cmd/<name>/main.go` 是阶段的"验收证明"。
 3. **接口小而稳，实现可替换** —— `Tool`、`Memory`、`event.Handler` 都是窄接口。
@@ -238,7 +243,9 @@ GamingWorld/
 ├── cmd/
 │   ├── hello/      # 阶段 0
 │   ├── chat/       # 阶段 1
-│   └── react/      # 阶段 2+（逐步瘦身）
+│   ├── react/      # 阶段 2+（逐步瘦身）
+│   ├── state/      # 阶段 5：State 序列化/恢复验收
+│   └── agent/      # 阶段 5：Memory 跨运行恢复验收
 ├── runtime/
 │   ├── llm/        # 阶段 1
 │   ├── tool/       # 阶段 3
@@ -259,7 +266,7 @@ GamingWorld/
 └── CLAUDE.md       # 本文件
 ```
 
-> 注：现有 `runtime/` 下的大写目录（`Agent/` 等）将统一改为小写，以符合 Go 包命名惯例。`web/` 与 `runtime/world/` 到对应阶段才创建，避免过早抽象。
+> 注：包命名一律全小写（`runtime/agent`，不是 `runtime/Agent`）。`web/` 与 `runtime/world/` 到对应阶段才创建，避免过早抽象。
 
 ---
 
@@ -273,6 +280,8 @@ go run ./cmd/react
 go test ./...                                   # 全量测试
 go build ./...                                  # 全量编译检查
 ```
+
+> 注：仓库目前尚无 `_test.go`，`go test ./...` 暂为空跑。阶段 5 收尾建议补 `runtime/agent` 的 fake-LLM 单测（`Completer` 接口已为此铺好地基）。
 
 读取 `.env`：进程启动时调用 `internal/env.LoadEnv(".env")`，之后用 `os.Getenv("LLM_BASE_URL")` 等。
 
@@ -304,7 +313,7 @@ scip-go
 - [x] 阶段 2：最小 ReAct 循环（`cmd/react` 单文件跑通 23×17=391）
 - [x] 阶段 3：Tool 系统（`runtime/tool`：`Tool` 接口 + `Registry`；加 `now` 工具不改循环）
 - [x] 阶段 4：抽象循环 → `runtime/agent`（`Agent.Run` + `Completer` 接口，`cmd/react` 瘦身）
-- [ ] **阶段 5：State + Memory** ← 下一步
+- [~] **阶段 5（进行中）**：`runtime/state` 已建模（`State`/`Step` 带 json tag、`GetHistory` 拼轨迹）；`Memory` 接口已定，**`InMemory`/`File` 两实现待填**，`cmd/state`、`cmd/agent` 验收入口待写
 - [ ] 阶段 6 ~ 10：见路线图
 
-**下一步行动**：执行阶段 5——把单个 agent 的一次运行轨迹建模为 `runtime/state`（可序列化、可恢复），把跨运行持久化抽成 `runtime/memory`（按 agent 维度 Load/Save）。注意 state（单次运行内）与 memory（跨运行）的边界。
+**下一步行动**：收尾阶段 5——实现 `memory.InMemory`（进程内 map + `sync.RWMutex`）与 `memory.File`（`<agentID>.json` 持久化），写 `cmd/state`（State 序列化/恢复）与 `cmd/agent`（Memory 跨运行恢复上下文）验收。注意 state（单次运行内）与 memory（跨运行）的边界——两者都不碰共享世界（那是 `world/` 的事）。

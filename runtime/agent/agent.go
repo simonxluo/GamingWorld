@@ -23,7 +23,11 @@ func (a Agent) Run(ctx context.Context, input string, s *state.State) (string, e
 	s.Input = input
 
 	for step := 1; step < a.MaxSteps; step++ {
-		output, _ := a.LLM.Complete(ctx, a.System, s.GetHistory())
+		output, err := a.LLM.Complete(ctx, a.System, s.GetHistory())
+
+		if err != nil {
+			return "", err
+		}
 
 		if ans, ok := parseFinal(output); ok {
 			s.Final = ans
