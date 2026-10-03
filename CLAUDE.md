@@ -142,6 +142,7 @@ Final Answer: <最终回答>
 - `cmd/chat/main.go`：从 stdin 读一行，打印模型回复。
 - **验收**：`go run ./cmd/chat`，输入"你好"，拿到 glm-5.2 的中文回复。
 - **踩坑预警**：若端点是 OpenAI 兼容而非 Anthropic，改打 `/v1/chat/completions` 并换 schema；先 `curl` 确认端点形态。
+- **后续漂移**（以代码为准）：`Client` 字段名为 `BaseUrl`/`ApiKey`/`Model`/`HttpClient`；鉴权走 `x-api-key` 头；`Complete` 拼接响应内全部 `text` block，不止 `content[0]`。
 
 ### ▶ 阶段 2：最小 ReAct 循环 ⭐（里程碑）
 **目标**：**单文件**手写一个完整的 ReAct 循环，能调用工具回答问题。
@@ -280,6 +281,11 @@ go build ./...                                  # 全量编译检查
 ```
 
 读取 `.env`：进程启动时调用 `internal/env.LoadEnv(".env")`，之后用 `os.Getenv("LLM_BASE_URL")` 等。
+
+### Git 约定
+
+- 提交信息：conventional commits + 中文描述（`feat:` / `fix:` / `refactor:` / `test:` / `docs:` / `chore:`），scope 可选（如 `test(agent):`）
+- 日常开发在 `develop` 分支，PR 合入 `main`
 
 ### 代码索引（SCIP）
 
