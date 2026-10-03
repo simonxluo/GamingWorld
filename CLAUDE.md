@@ -24,7 +24,7 @@
 
 | 项 | 约定 |
 |---|---|
-| 语言 | Go 1.22+（用 `range-over-int`、`slices`、`maps` 标准库） |
+| 语言 | Go 1.25+（`go.mod` 锁 1.25.7；用 `range-over-int`、`slices`、`maps` 标准库） |
 | 模块路径 | `github.com/simonxluo/GamingWorld` |
 | 配置来源 | `.env`（`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`） |
 | LLM 端点 | `http://api.simonluo.site`（**Anthropic Messages API 兼容**），模型 `glm-5.2`；备用 DeepSeek `https://api.deepseek.com/anthropic` |
@@ -185,12 +185,14 @@ Final Answer: <最终回答>
 - `cmd/react/main.go` 缩成 ~10 行：装配 → `agent.Run`。
 - **验收**：换一个完全不同的问题域（如"查时间+算数"），`main` 不动，只换 `System` 和注册的工具。
 - **演进预告**：`Run` 现在是同步签名。阶段 9 多 agent 并发 tick 时会暴露局限（LLM 调用阻塞），届时再演进成异步。
+- **后续漂移**（以代码为准）：`LLM` 字段已泛化为 `Completer` 窄接口（测试可注入 `fakeLLM`）；阶段 5 起 `Run` 签名变为 `Run(ctx, input string, s *state.State)`，轨迹显式传入。
 
 ### ▶ 阶段 5：State + Memory → `runtime/state`、`runtime/memory`
 - `runtime/state`：把**单个 agent 的一次运行轨迹**显式建模为 `State`（steps 列表，agent 私有），不再藏在循环局部变量里。⚠️ 这里只存"一个 agent 的一次对话历史"，**不存共享世界**——世界是 `world/` 的事（阶段 10）。
 - `runtime/memory`：抽象存储接口 `Memory { Load / Save }`，按 agent 维度存取**跨运行**的持久化；先实现进程内 map（短期），再加文件实现（长期）。
 - **边界规则**：`state` = 单次运行内（可序列化、可恢复）；`memory` = 跨运行持久化（按 agent 维度）。两者都不碰共享世界。
 - **验收**：agent 处理完一个输入后，`State` 可序列化；下次 `Load` 能恢复上下文继续对话。
+- **实现备注**：`memory.Load` 对"首次运行"返回空 `State` 而非 error（`File` 实现把 `fs.ErrNotExist` 视为首次）；`cmd/state` 是本阶段验收入口——交互式 REPL，`-id` 标识 agent，每轮 `Save` 落盘到 `.state/`（已 gitignore）。`calculate`/`echo`/`now` 三个工具目前在 `cmd/react/tools.go` 与 `cmd/state/tools.go` 各有一份相同实现，等第三个使用方出现再抽共享包。
 
 ### ▶ 阶段 6：Event 系统 → `runtime/event`（也是前端接入点）
 **暴露的抽象点**：循环里到处 `slog.Info` 打日志，想加流式输出就得改循环 → 用事件解耦。
@@ -238,7 +240,8 @@ GamingWorld/
 ├── cmd/
 │   ├── hello/      # 阶段 0
 │   ├── chat/       # 阶段 1
-│   └── react/      # 阶段 2+（逐步瘦身）
+│   ├── react/      # 阶段 2+（逐步瘦身）
+│   └── state/      # 阶段 5 验收：带记忆的交互式 REPL
 ├── runtime/
 │   ├── llm/        # 阶段 1
 │   ├── tool/       # 阶段 3
@@ -259,7 +262,7 @@ GamingWorld/
 └── CLAUDE.md       # 本文件
 ```
 
-> 注：现有 `runtime/` 下的大写目录（`Agent/` 等）将统一改为小写，以符合 Go 包命名惯例。`web/` 与 `runtime/world/` 到对应阶段才创建，避免过早抽象。
+> 注：`runtime/` 目录已统一为小写（符合 Go 包命名惯例）。`cmd/agent/` 目前是空占位。`web/` 与 `runtime/world/` 到对应阶段才创建，避免过早抽象。
 
 ---
 
@@ -270,7 +273,9 @@ go mod init github.com/simonxluo/GamingWorld   # 阶段 0 执行一次
 go run ./cmd/hello                              # 各阶段验收
 go run ./cmd/chat
 go run ./cmd/react
+go run ./cmd/state                              # 阶段 5：带记忆的 REPL（-id 指定 agent，历史落 .state/）
 go test ./...                                   # 全量测试
+go test ./runtime/agent -run TestRunLoop        # 跑单个测试
 go build ./...                                  # 全量编译检查
 ```
 
@@ -304,7 +309,8 @@ scip-go
 - [x] 阶段 2：最小 ReAct 循环（`cmd/react` 单文件跑通 23×17=391）
 - [x] 阶段 3：Tool 系统（`runtime/tool`：`Tool` 接口 + `Registry`；加 `now` 工具不改循环）
 - [x] 阶段 4：抽象循环 → `runtime/agent`（`Agent.Run` + `Completer` 接口，`cmd/react` 瘦身）
-- [ ] **阶段 5：State + Memory** ← 下一步
-- [ ] 阶段 6 ~ 10：见路线图
+- [x] 阶段 5：State + Memory（`runtime/state`：`State`/`Step` 轨迹模型；`runtime/memory`：`Memory` 接口 + `InMemory`（并发安全）+ `File`（`<dir>/<agentID>.json`）；`Agent.Run` 增加 `*state.State` 参数；`cmd/state` 交互式验收，`fakeLLM` 单测在 `runtime/agent/agent_test.go`）
+- [ ] **阶段 6：Event 系统** ← 下一步
+- [ ] 阶段 7 ~ 10：见路线图
 
-**下一步行动**：执行阶段 5——把单个 agent 的一次运行轨迹建模为 `runtime/state`（可序列化、可恢复），把跨运行持久化抽成 `runtime/memory`（按 agent 维度 Load/Save）。注意 state（单次运行内）与 memory（跨运行）的边界。
+**下一步行动**：执行阶段 6——定义 `Event`（Thought/Action/Observation/Final/Error）与 `Handler`，`Agent` 持有 handler 列表逐步 `emit`，把循环里的 `slog` 直打解耦成事件流；再加 HTTP server + SSE（`GET /events`），作为后续 three.js 前端的接入通道。
